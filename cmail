@@ -1,0 +1,166 @@
+#!/bin/bash
+
+# Check if commands exist
+mail_command_ne=""
+if ! type -p dig >& /dev/null || [ -z "$(type -p dig 2> /dev/null)" ]; then
+    mail_command_ne+="Command "dig" not found. Please install "dig" before running this script.\n"
+fi
+if ! type -p nc >& /dev/null || [ -z "$(type -p nc 2> /dev/null)" ]; then
+    mail_command_ne+="Command "nc" not found. Please install "netcat" before running this script.\n"
+fi
+if ! type -p expect >& /dev/null || [ -z "$(type -p expect 2> /dev/null)" ]; then
+    mail_command_ne+="Command "expect" not found. Please install "expect" before running this script.\n"
+fi
+if ! type -p telnet >& /dev/null || [ -z "$(type -p telnet 2> /dev/null)" ]; then
+    mail_command_ne+="Command "telnet" not found. Please install "telnet" before running this script."
+fi
+
+if [ -n "$mail_command_ne" ]; then
+    echo -e "$mail_command_ne"
+    exit 1
+fi
+
+# smpt ports to check with telnet
+mail_ports=(25 587 465 2525)
+
+mail_verbose=0
+
+# Print help menu
+if [ "$1" = "--help" ]; then
+    echo "Usage: $0 [-d <email.domain>] [-e <smtp-server>] [-p <port>] mail@address"
+    echo "       -d: specifies the email domain"
+    echo "       -e: specifies the smtp server domain (mail exchanger)"
+    echo "       -p: specifies the smtp server port"
+    echo "       -v: verbose. Prints detailed information"
+    exit 0
+fi
+
+# Get Options
+while getopts "hd:e:p:v" OPTION
+do
+    case $OPTION in
+        h)
+            echo "Usage: $0 [-d <email.domain>] [-e <smtp-server>] [-p <port>] mail@address"
+            echo "       -d: specifies the email domain"
+            echo "       -e: specifies the smtp server domain (mail exchanger)"
+            echo "       -p: specifies the smtp server port"
+            exit 0
+            ;;
+        d)
+            mail_domain=$OPTARG
+            ;;
+        e)  
+            if ping -c1 -w1 $OPTARG >& /dev/null; then
+                mail_exchanger=( $OPTARG )
+            else
+                echo "$OPTARG is not reachable."
+                exit 1
+            fi
+            ;;
+        p)  mail_port=( $OPTARG )
+            ;;
+        v)  mail_verbose=1
+            ;;
+        \?)
+            echo "Usage: $0 [-d <email.domain>] [-e <smtp-server>] [-p <port>] mail@address"
+            echo "       -d: specifies the email domain"
+            echo "       -e: specifies the smtp server domain (mail exchanger)"
+            echo "       -p: specifies the smtp server port"
+            exit 1
+            ;;
+    esac
+done
+
+shift $(($OPTIND-1))
+
+# Check if email adress format is valid
+if [ "$#" -lt 1 ]; then
+    echo "Usage: $0 [-d <email.domain>] [-e <smtp-server>] [-p <port>] mail@address"
+    echo "       -d: specifies the email domain"
+    echo "       -e: specifies the smtp server domain (mail exchanger)"
+    echo "       -p: specifies the smtp server port"
+    exit 1
+elif echo "$1" | grep "^[a-zA-Z0-9._%+-]*@[a-zA-Z0-9._-]*\.[a-zA-Z0-9]*$" > /dev/null; then
+        mail_address=$1
+else
+    echo "E-mail address not valid."
+    exit 1
+fi
+
+# If no mail domain is specified, use the one from the email adress
+if [ -z "$mail_domain" ]; then
+    mail_domain=${mail_address##*@}
+fi
+
+# Get the mail exchanger belonging to the mail domain, if not specified
+if [ ${#mail_exchanger[@]} -eq 0 ]; then
+    mail_exchanger=( $(dig +short $mail_domain mx | tr -s ' ' | cut -d ' ' -f2) )
+    for ((i=0; i<${#mail_exchanger[@]};i++)); do
+        mail_exchanger[$i]=${mail_exchanger[$i]%?}
+    done
+fi
+
+# Verbose option
+if [ $mail_verbose -gt 0 ]; then
+    echo "mail address: $mail_address"
+    echo "mail domain: $mail_domain"
+    echo "mail exchanger: ${mail_exchanger[0]}"
+fi
+
+# Check if email address is valid
+if [ ${#mail_exchanger[@]} -ne 0 ]; then
+    mail_ip=$(dig +short myip.opendns.com @resolver1.opendns.com)
+    mail_hostname=$(dig +short -x $mail_ip)
+    mail_hostname=${mail_hostname%?}
+    if [ $mail_verbose -gt 0 ]; then
+        echo "ip address: $mail_ip"
+        echo "hostname (public): $mail_hostname"
+    fi
+    for i in ${mail_ports[@]}; do
+        if [ $mail_verbose -gt 0 ]; then
+            echo -n "port $i:"
+        fi
+        if nc -zv -w 1 ${mail_exchanger[0]} $i 2>&1 | grep "(smtp)" > /dev/null; then
+            if [ $mail_verbose -gt 0 ]; then
+                echo " open"
+            fi
+            mail_test="`expect << __EOF
+#! /usr/bin/env expect
+set timeout 1
+spawn telnet ${mail_exchanger[0]} $i
+expect "220"
+send "HELO $mail_hostname\r"
+expect "250"
+send "MAIL FROM: <$mail_address>\r"
+expect "250"
+send "RCPT TO: <$mail_address>\r"
+expect "*"
+send "QUIT\r"
+expect eof
+__EOF`"
+            if [ $mail_verbose -gt 0 ]; then
+                echo
+                echo "$mail_test"
+                echo
+            fi
+            if [ "$(echo "$mail_test" | tail -n -3 | head -n 1 | cut -d ' ' -f1)" = "250" ]; then
+                echo "E-Mail is valid."
+                exit 0
+            else
+                echo "E-Mail is not valid."
+                exit 1
+            fi
+        else
+            if [ $mail_verbose -gt 0 ]; then
+                echo " closed or not smtp"
+            fi
+        fi
+    done
+    echo "Tested port(s) ${mail_ports[@]} without success."
+    echo "Try $0 -p <smpt-port> $1"
+    exit 1
+else 
+    echo "There's something wrong with the e-mail domain: Couldn't find mail exchanger."
+    echo "Try $0 -d <email.domain> $1"
+    exit 1
+fi
