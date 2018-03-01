@@ -1,5 +1,5 @@
 # cmail - CheckMail
-A bash script that checks if an email address is valid or not.
+A bash script that checks if an e-mail address is valid by connecting to the smtp server and checking the result.
 
 ### Preparing
 You need to install:
