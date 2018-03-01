@@ -8,7 +8,7 @@ You need to install:
  * expact
  * telnet
 
-### Usage: 
+### Usage
 ```bash
 cmail [-d <email.domain>] [-e <smtp-server>] [-p <port>] mail@address
       -d: specifies the email domain
