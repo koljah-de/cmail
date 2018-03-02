@@ -20,7 +20,7 @@ if [ -n "$mail_command_ne" ]; then
     exit 1
 fi
 
-# smpt ports to check with telnet
+# smpt ports
 mail_ports=(25 587 465 2525)
 
 mail_verbose=0
